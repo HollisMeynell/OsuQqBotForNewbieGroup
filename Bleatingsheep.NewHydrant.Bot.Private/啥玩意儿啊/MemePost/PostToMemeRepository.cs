@@ -7,13 +7,13 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.Web;
 using Bleatingsheep.NewHydrant.Attributions;
 using Bleatingsheep.OsuQqBot.Database.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Octokit;
-using Polly;
 using Sisters.WudiLib;
 using Sisters.WudiLib.Posts;
 using SixLabors.ImageSharp;
@@ -24,9 +24,11 @@ namespace Bleatingsheep.NewHydrant.啥玩意儿啊.MemePost;
 [Component("post_meme")]
 internal partial class PostToMemeRepository : IMessageCommand
 {
-    private static readonly char[] s_invalidFileNameChars = Path.GetInvalidFileNameChars();
-    private static readonly char[] s_invalidFileNameCharsExtra = { '?', '\'', '"', '*', '#' };
-    private static readonly string s_invalidFileNameCharsWindows = "\u0022\u003C\u003E|\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\t\n\u000B\f\r\u000E\u000F\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001A\u001B\u001C\u001D\u001E\u001F:*?\\/";
+    private static string EncodeFileName(string fileName)
+    {
+        var encoded = HttpUtility.UrlEncode(fileName); // UrlPathEncode won't replace characters like '?' '#'
+        return encoded.Replace("+", "%20", StringComparison.Ordinal); // UrlPathEncode replace space ' ' with '+'. However, "%20" is expected.
+    }
 
     private readonly IDbContextFactory<NewbieContext> _dbContextFactory;
     private readonly ILogger<PostToMemeRepository> _logger;
@@ -61,23 +63,6 @@ internal partial class PostToMemeRepository : IMessageCommand
             return;
         }
         var fileName = match.Groups[1].Value;
-        if (fileName.IndexOfAny(s_invalidFileNameChars) != -1)
-        {
-            await api.SendMessageAsync(context.Endpoint, "命令格式错误，正确格式为“/post 标签”，标签必须可以用作文件名。");
-            return;
-        }
-        int invalidIndex = fileName.IndexOfAny(s_invalidFileNameCharsExtra);
-        if (invalidIndex != -1)
-        {
-            await api.SendMessageAsync(context.Endpoint, $"命令格式错误，标签中含有不可用字符“{fileName[invalidIndex]}”。");
-            return;
-        }
-        invalidIndex = fileName.AsSpan().IndexOfAny(s_invalidFileNameCharsWindows);
-        if (invalidIndex != -1)
-        {
-            await api.SendMessageAsync(context.Endpoint, $"命令格式错误，标签中含有不可用字符“{fileName[invalidIndex]}”。");
-            return;
-        }
 
         // 获取推送信息
         await using var db = _dbContextFactory.CreateDbContext();
@@ -120,7 +105,13 @@ internal partial class PostToMemeRepository : IMessageCommand
                 return;
             }
 
-            var createFile = await gitHubClient.Repository.Content.CreateFile(pushData.Repository.Owner, pushData.Repository.Name, Path.Combine(pushData.Path, $"{fileName}.{ext}"), new CreateFileRequest($"Bot upload. Group {g.GroupId}, User {g.UserId}", Convert.ToBase64String(imageBytes), false));
+            var createFile = await gitHubClient.Repository.Content.CreateFile(pushData.Repository.Owner, pushData.Repository.Name, Path.Combine(pushData.Path, $"{EncodeFileName(fileName)}.{ext}"), new CreateFileRequest($"Bot upload. Group {g.GroupId}, User {g.UserId}", Convert.ToBase64String(imageBytes), false));
+        }
+        catch (HttpRequestException e)
+        {
+            _logger.LogInformation(e, "HTTP 请求错误，可能是图片链接失效。");
+            await api.SendMessageAsync(g.Endpoint, "图片获取失败，可能是 bot 框架提供的图片链接失效，请尝试将图片保存重发再试，或者换一张图片。");
+            return;
         }
         catch (ImageFormatException e)
         {
@@ -146,8 +137,15 @@ internal partial class PostToMemeRepository : IMessageCommand
         sb.Append($"推送图片成功。{fileName}.{ext}");
         if (pushData.HomePage is not null)
         {
+            var homeUrl = pushData.HomePage;
+            var uriBuilder = new UriBuilder(homeUrl);
+            if (uriBuilder.Fragment.Length <= "#".Length)
+            {
+                uriBuilder.Fragment = EncodeFileName(fileName);
+                homeUrl = uriBuilder.Uri.AbsoluteUri;
+            }
             sb.AppendLine();
-            sb.Append($"更多精彩尽在 {pushData.HomePage}");
+            sb.Append($"更多精彩尽在 {homeUrl}");
         }
 
         await api.SendMessageAsync(g.Endpoint, sb.ToString());
@@ -160,9 +158,9 @@ internal partial class PostToMemeRepository : IMessageCommand
         {
             GroupMessage g => g.Content.MergeContinuousTextSections().Sections.Where(s => s.Type != Section.TextType || !string.IsNullOrWhiteSpace(s.Data[Section.TextParamName])).ToList() switch
             {
-                [{ Type: "reply" }, { Type: "at" }, { Type: "at" }, { Type: "text" } s, ..] => s.Data["text"],
-                [{ Type: "reply" }, { Type: "at" }, { Type: "text" } s, ..] => s.Data["text"],
-                [{ Type: "reply" }, { Type: "text" } s, ..] => s.Data["text"],
+            [{ Type: "reply" }, { Type: "at" }, { Type: "at" }, { Type: "text" } s, ..] => s.Data["text"],
+            [{ Type: "reply" }, { Type: "at" }, { Type: "text" } s, ..] => s.Data["text"],
+            [{ Type: "reply" }, { Type: "text" } s, ..] => s.Data["text"],
                 _ => default,
             },
             _ => default,

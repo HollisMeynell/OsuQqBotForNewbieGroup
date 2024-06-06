@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -34,9 +34,9 @@ namespace Bleatingsheep.NewHydrant.Osu.Newbie
 #endif
         private static readonly IReadOnlyDictionary<long, double?> ManagedGroups = new Dictionary<long, double?>
         {
-            [595985887] = 2500,
-            [928936255] = null,
-            [281624271] = null,
+            [595985887] = 2800,
+            [928936255] = 4300,
+            [281624271] = 5800,
             [758120648] = null,
             [514661057] = null,
 #if DEBUG
@@ -253,12 +253,35 @@ namespace Bleatingsheep.NewHydrant.Osu.Newbie
                 var (performance, level) = HintBinding(httpApiClient, endpoint, e).ConfigureAwait(false).GetAwaiter().GetResult();
                 if (performance >= limit)
                 {
-                    const string reason = "您的 PP 超限，不能加入本群。";
-                    _ = httpApiClient.SendMessageAsync(endpoint, $"以“{reason}”拒绝。");
-                    return new GroupRequestResponse(reason);
+                    string response = "您的 PP 高于此群大部分玩家，不推荐加入本群。请加入";
+                    string groups = "其他群";
+                    string reason = "暂无";
+
+                    if (limit > 0 && limit <= 3000)
+                    {
+                        groups = "进阶群 928936255";
+                        reason = "新人群超限";
+                    }
+                    else if (limit > 3000 && limit <= 4500)
+                    {
+                        groups = "高阶群 281624271";
+                        reason = "进阶群超限";
+                    }
+                    else if (limit > 4500 && limit <= 6000)
+                    {
+                        reason = "高阶群超限";
+                    }
+
+                    response = response + groups + "。";
+
+                    _ = httpApiClient.SendMessageAsync(endpoint, $"已拒绝。原因：“{reason}”。");
+
+                    return new GroupRequestResponse(response);
+
                     //_ = httpApiClient.SendMessageAsync(endpoint, $"建议拒绝。");
                     //return null;
                 }
+
                 if (limit != null && level == 1)
                 {
                     const string reason = "";
